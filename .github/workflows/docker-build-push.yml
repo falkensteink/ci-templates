@@ -1,0 +1,60 @@
+name: Docker Build & Push
+
+on:
+  workflow_call:
+    inputs:
+      image-name:
+        description: "Image name on ghcr.io (e.g., birdmug-portal). Defaults to repo name lowercased."
+        type: string
+        default: ""
+      dockerfile:
+        description: "Path to Dockerfile (relative to repo root)"
+        type: string
+        default: "Dockerfile"
+      context:
+        description: "Docker build context (relative to repo root)"
+        type: string
+        default: "."
+
+jobs:
+  build-push:
+    name: Build & Push Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set image name
+        id: meta
+        run: |
+          # Use provided image-name or fall back to repo name (lowercased)
+          IMAGE_NAME="${{ inputs.image-name }}"
+          if [ -z "$IMAGE_NAME" ]; then
+            IMAGE_NAME=$(echo "${{ github.event.repository.name }}" | tr '[:upper:]' '[:lower:]')
+          fi
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          REGISTRY="ghcr.io/falkensteink"
+
+          echo "image=${REGISTRY}/${IMAGE_NAME}" >> $GITHUB_OUTPUT
+          echo "short-sha=${SHORT_SHA}" >> $GITHUB_OUTPUT
+          echo "Image: ${REGISTRY}/${IMAGE_NAME}"
+          echo "Tags: latest, ${SHORT_SHA}"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.dockerfile }}
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.image }}:latest
+            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.short-sha }}
