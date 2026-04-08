@@ -28,17 +28,12 @@ jobs:
           BRANCH: ${{ inputs.branch }}
         run: |
           # Build a GitHub push-style payload that toshi-bot expects
-          PAYLOAD=$(cat <<JSONEOF
-          {
-            "ref": "refs/heads/${BRANCH}",
-            "repository": { "name": "${REPO_NAME}" },
-            "pusher": { "name": "github-actions" }
-          }
-          JSONEOF
-          )
+          PAYLOAD='{"ref":"refs/heads/'"$BRANCH"'","repository":{"name":"'"$REPO_NAME"'"},"pusher":{"name":"github-actions"}}'
 
           # Sign the payload with HMAC SHA-256 (same as GitHub webhooks)
-          SIGNATURE="sha256=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | awk '{print $2}')"
+          SIGNATURE="sha256=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | awk '{print $2}')"
+
+          echo "Deploying $REPO_NAME ($BRANCH) via toshi-bot webhook..."
 
           # POST to toshi-bot
           HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
@@ -53,4 +48,4 @@ jobs:
             echo "Deploy trigger failed!"
             exit 1
           fi
-          echo "Deploy triggered for $REPO_NAME ($BRANCH)"
+          echo "Deploy triggered successfully"
