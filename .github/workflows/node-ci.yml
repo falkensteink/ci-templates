@@ -35,7 +35,7 @@ jobs:
         id: eslint-check
         working-directory: ${{ inputs.working-directory }}
         run: |
-          if ls .eslintrc* eslint.config.* 2>/dev/null | head -1; then
+          if ls .eslintrc* eslint.config.* 2>/dev/null | grep -q .; then
             echo "has_eslint=true" >> $GITHUB_OUTPUT
           else
             echo "has_eslint=false" >> $GITHUB_OUTPUT

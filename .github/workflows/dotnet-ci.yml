@@ -45,7 +45,6 @@ jobs:
     name: Tests
     if: ${{ inputs.has-tests }}
     runs-on: ubuntu-latest
-    needs: build
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
@@ -93,7 +92,14 @@ jobs:
           dotnet-version: ${{ inputs.dotnet-version }}
       - name: Check for vulnerable packages
         run: |
-          dotnet list ${{ inputs.solution-file }} package --vulnerable --include-transitive 2>&1 | tee audit.txt
+          # dotnet list only works on .sln files; for .csproj, restore and scan the project
+          FILE="${{ inputs.solution-file }}"
+          if [[ "$FILE" == *.csproj ]]; then
+            dotnet restore "$FILE"
+            dotnet list "$(dirname "$FILE")" package --vulnerable --include-transitive 2>&1 | tee audit.txt
+          else
+            dotnet list $FILE package --vulnerable --include-transitive 2>&1 | tee audit.txt
+          fi
           # Fail if any critical/high vulnerabilities found
           if grep -qi "critical\|high" audit.txt; then
             echo "Vulnerable packages detected!"
