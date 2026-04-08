@@ -1,0 +1,104 @@
+name: Toshi Deploy
+
+on:
+  workflow_call:
+    inputs:
+      project-directory:
+        description: "Absolute path on Toshi (e.g., ~/NPC-PM)"
+        type: string
+        required: true
+      compose-file:
+        description: "Docker compose file to use"
+        type: string
+        default: "docker-compose.prod.yml"
+      branch:
+        description: "Branch to pull"
+        type: string
+        default: "main"
+      doppler-project:
+        description: "Doppler project name (leave empty to skip Doppler)"
+        type: string
+        default: ""
+      doppler-config:
+        description: "Doppler config name (e.g., prd, dev)"
+        type: string
+        default: "prd"
+      run-migrations:
+        description: "Run migrations after deploy"
+        type: boolean
+        default: false
+      migration-command:
+        description: "Migration command (e.g., 'alembic upgrade head')"
+        type: string
+        default: ""
+      migration-service:
+        description: "Docker service to run migrations in"
+        type: string
+        default: "backend"
+      health-check:
+        description: "Health check command to run after deploy"
+        type: string
+        default: ""
+    secrets:
+      MATTERMOST_WEBHOOK_URL:
+        required: false
+
+jobs:
+  deploy:
+    name: Deploy to Toshi
+    runs-on: [self-hosted, toshi]
+    steps:
+      - name: Pull latest code
+        run: |
+          cd ${{ inputs.project-directory }}
+          git fetch origin ${{ inputs.branch }}
+          git checkout ${{ inputs.branch }}
+          git pull origin ${{ inputs.branch }}
+
+      - name: Build and deploy
+        run: |
+          cd ${{ inputs.project-directory }}
+          if [ -n "${{ inputs.doppler-project }}" ]; then
+            doppler run -p ${{ inputs.doppler-project }} -c ${{ inputs.doppler-config }} -- \
+              docker compose -f ${{ inputs.compose-file }} up -d --build
+          else
+            docker compose -f ${{ inputs.compose-file }} up -d --build
+          fi
+
+      - name: Run migrations
+        if: ${{ inputs.run-migrations && inputs.migration-command != '' }}
+        run: |
+          cd ${{ inputs.project-directory }}
+          sleep 10  # Wait for containers to be healthy
+          if [ -n "${{ inputs.doppler-project }}" ]; then
+            doppler run -p ${{ inputs.doppler-project }} -c ${{ inputs.doppler-config }} -- \
+              docker compose -f ${{ inputs.compose-file }} exec ${{ inputs.migration-service }} ${{ inputs.migration-command }}
+          else
+            docker compose -f ${{ inputs.compose-file }} exec ${{ inputs.migration-service }} ${{ inputs.migration-command }}
+          fi
+
+      - name: Health check
+        if: ${{ inputs.health-check != '' }}
+        run: |
+          cd ${{ inputs.project-directory }}
+          sleep 5
+          ${{ inputs.health-check }}
+
+      - name: Notify Mattermost (success)
+        if: success() && secrets.MATTERMOST_WEBHOOK_URL != ''
+        run: |
+          REPO="${{ github.repository }}"
+          BRANCH="${{ inputs.branch }}"
+          SHA="${{ github.sha }}"
+          curl -s -X POST "${{ secrets.MATTERMOST_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"text\": \":white_check_mark: **${REPO}** deployed \`${BRANCH}\` (\`${SHA:0:7}\`) to Toshi\"}"
+
+      - name: Notify Mattermost (failure)
+        if: failure() && secrets.MATTERMOST_WEBHOOK_URL != ''
+        run: |
+          REPO="${{ github.repository }}"
+          BRANCH="${{ inputs.branch }}"
+          curl -s -X POST "${{ secrets.MATTERMOST_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"text\": \":x: **${REPO}** deploy FAILED on \`${BRANCH}\` — check GitHub Actions\"}"

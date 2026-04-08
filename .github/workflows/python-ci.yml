@@ -1,0 +1,120 @@
+name: Python CI
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        type: string
+        default: "3.12"
+      working-directory:
+        description: "Directory containing source and tests (relative to repo root)"
+        type: string
+        default: "."
+      requirements-file:
+        description: "Path to requirements file (relative to repo root)"
+        type: string
+        default: "requirements.txt"
+      requirements-dev-file:
+        description: "Optional separate dev requirements file"
+        type: string
+        default: ""
+      lint-paths:
+        description: "Space-separated paths to lint (relative to working-directory)"
+        type: string
+        default: "."
+      test-command:
+        description: "Command to run tests (executed in working-directory)"
+        type: string
+        default: "pytest -q"
+      has-tests:
+        description: "Set to false to skip the test job"
+        type: boolean
+        default: true
+      services-postgres:
+        description: "Spin up a PostgreSQL 16 service container for tests"
+        type: boolean
+        default: false
+      db-test-host:
+        description: "DB host for tests (only when services-postgres is true)"
+        type: string
+        default: "localhost"
+      db-test-port:
+        description: "DB port for tests"
+        type: string
+        default: "5432"
+
+jobs:
+  lint:
+    name: Lint & Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+      - name: Install ruff
+        run: pip install ruff
+      - name: Ruff check
+        working-directory: ${{ inputs.working-directory }}
+        run: ruff check ${{ inputs.lint-paths }}
+      - name: Ruff format check
+        working-directory: ${{ inputs.working-directory }}
+        run: ruff format --check ${{ inputs.lint-paths }}
+
+  test:
+    name: Tests
+    if: ${{ inputs.has-tests }}
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: ${{ inputs.services-postgres && 'postgres:16-alpine' || '' }}
+        env:
+          POSTGRES_USER: testuser
+          POSTGRES_PASSWORD: testpass
+          POSTGRES_DB: testdb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U testuser"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DB_TEST_HOST: ${{ inputs.db-test-host }}
+      DB_TEST_PORT: ${{ inputs.db-test-port }}
+      ENVIRONMENT: development
+      BIRDMUG_JWT_SECRET: dev-secret-change-in-prod
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+      - name: Install dependencies
+        run: |
+          if [ -n "${{ inputs.requirements-dev-file }}" ]; then
+            pip install -r ${{ inputs.requirements-dev-file }}
+          else
+            pip install -r ${{ inputs.requirements-file }}
+          fi
+      - name: Run tests
+        working-directory: ${{ inputs.working-directory }}
+        run: ${{ inputs.test-command }}
+      - name: Upload coverage
+        if: always() && hashFiles('**/coverage.xml') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: "**/coverage.xml"
+
+  security:
+    name: Dependency Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+      - name: Install pip-audit
+        run: pip install pip-audit
+      - name: Audit dependencies
+        run: pip-audit -r ${{ inputs.requirements-file }}

@@ -1,0 +1,78 @@
+name: Node CI
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        type: string
+        default: "20"
+      working-directory:
+        description: "Directory containing package.json"
+        type: string
+        default: "."
+      has-tests:
+        description: "Set to false to skip the test job"
+        type: boolean
+        default: false
+      test-command:
+        description: "Command to run tests"
+        type: string
+        default: "npm test"
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+      - name: Install dependencies
+        working-directory: ${{ inputs.working-directory }}
+        run: npm ci --ignore-scripts 2>/dev/null || npm install --ignore-scripts
+      - name: Check for eslint config
+        id: eslint-check
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          if ls .eslintrc* eslint.config.* 2>/dev/null | head -1; then
+            echo "has_eslint=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_eslint=false" >> $GITHUB_OUTPUT
+            echo "No eslint config found — skipping lint"
+          fi
+      - name: Run eslint
+        if: steps.eslint-check.outputs.has_eslint == 'true'
+        working-directory: ${{ inputs.working-directory }}
+        run: npx eslint .
+
+  test:
+    name: Tests
+    if: ${{ inputs.has-tests }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+      - name: Install dependencies
+        working-directory: ${{ inputs.working-directory }}
+        run: npm ci 2>/dev/null || npm install
+      - name: Run tests
+        working-directory: ${{ inputs.working-directory }}
+        run: ${{ inputs.test-command }}
+
+  security:
+    name: Dependency Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+      - name: Install dependencies
+        working-directory: ${{ inputs.working-directory }}
+        run: npm ci 2>/dev/null || npm install
+      - name: Audit dependencies
+        working-directory: ${{ inputs.working-directory }}
+        run: npm audit --audit-level=moderate || true
