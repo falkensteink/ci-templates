@@ -1,0 +1,101 @@
+name: .NET CI
+
+on:
+  workflow_call:
+    inputs:
+      dotnet-version:
+        type: string
+        default: "8.0"
+      solution-file:
+        description: "Path to .sln file (relative to repo root)"
+        type: string
+        default: ""
+      test-project:
+        description: "Path to test project directory (relative to repo root)"
+        type: string
+        default: ""
+      has-tests:
+        description: "Set to false to skip the test job"
+        type: boolean
+        default: true
+      has-frontend:
+        description: "Set to true to run frontend lint (npm)"
+        type: boolean
+        default: false
+      frontend-directory:
+        description: "Directory containing frontend package.json"
+        type: string
+        default: "."
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ inputs.dotnet-version }}
+      - name: Restore dependencies
+        run: dotnet restore ${{ inputs.solution-file }}
+      - name: Build
+        run: dotnet build ${{ inputs.solution-file }} --no-restore --configuration Release
+
+  test:
+    name: Tests
+    if: ${{ inputs.has-tests }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ inputs.dotnet-version }}
+      - name: Restore dependencies
+        run: dotnet restore ${{ inputs.solution-file }}
+      - name: Run tests
+        run: |
+          if [ -n "${{ inputs.test-project }}" ]; then
+            dotnet test ${{ inputs.test-project }} --no-restore --verbosity normal --collect:"XPlat Code Coverage"
+          else
+            dotnet test ${{ inputs.solution-file }} --no-restore --verbosity normal --collect:"XPlat Code Coverage"
+          fi
+      - name: Upload coverage
+        if: always() && hashFiles('**/coverage.cobertura.xml') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: "**/coverage.cobertura.xml"
+
+  frontend-lint:
+    name: Frontend Lint
+    if: ${{ inputs.has-frontend }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install dependencies
+        working-directory: ${{ inputs.frontend-directory }}
+        run: npm ci 2>/dev/null || npm install
+      - name: Lint
+        working-directory: ${{ inputs.frontend-directory }}
+        run: npx next lint
+
+  security:
+    name: Dependency Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ inputs.dotnet-version }}
+      - name: Check for vulnerable packages
+        run: |
+          dotnet list ${{ inputs.solution-file }} package --vulnerable --include-transitive 2>&1 | tee audit.txt
+          # Fail if any critical/high vulnerabilities found
+          if grep -qi "critical\|high" audit.txt; then
+            echo "Vulnerable packages detected!"
+            exit 1
+          fi
