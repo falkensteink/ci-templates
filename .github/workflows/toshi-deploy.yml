@@ -3,102 +3,54 @@ name: Toshi Deploy
 on:
   workflow_call:
     inputs:
-      project-directory:
-        description: "Absolute path on Toshi (e.g., ~/NPC-PM)"
+      repo-name:
+        description: "Repository name as it appears in deploy.sh REPO_DIR (e.g., NPC-PM, Spellstorm)"
         type: string
         required: true
-      compose-file:
-        description: "Docker compose file to use"
-        type: string
-        default: "docker-compose.prod.yml"
       branch:
-        description: "Branch to pull"
+        description: "Branch to deploy"
         type: string
         default: "main"
-      doppler-project:
-        description: "Doppler project name (leave empty to skip Doppler)"
-        type: string
-        default: ""
-      doppler-config:
-        description: "Doppler config name (e.g., prd, dev)"
-        type: string
-        default: "prd"
-      run-migrations:
-        description: "Run migrations after deploy"
-        type: boolean
-        default: false
-      migration-command:
-        description: "Migration command (e.g., 'alembic upgrade head')"
-        type: string
-        default: ""
-      migration-service:
-        description: "Docker service to run migrations in"
-        type: string
-        default: "backend"
-      health-check:
-        description: "Health check command to run after deploy"
-        type: string
-        default: ""
     secrets:
-      MATTERMOST_WEBHOOK_URL:
-        required: false
+      TOSHI_DEPLOY_SECRET:
+        description: "GitHub webhook secret for toshi-bot verification"
+        required: true
 
 jobs:
   deploy:
     name: Deploy to Toshi
-    runs-on: [self-hosted, toshi]
+    runs-on: ubuntu-latest
     steps:
-      - name: Pull latest code
+      - name: Trigger toshi-bot deploy
+        env:
+          WEBHOOK_SECRET: ${{ secrets.TOSHI_DEPLOY_SECRET }}
+          REPO_NAME: ${{ inputs.repo-name }}
+          BRANCH: ${{ inputs.branch }}
         run: |
-          cd ${{ inputs.project-directory }}
-          git fetch origin ${{ inputs.branch }}
-          git checkout ${{ inputs.branch }}
-          git pull origin ${{ inputs.branch }}
+          # Build a GitHub push-style payload that toshi-bot expects
+          PAYLOAD=$(cat <<JSONEOF
+          {
+            "ref": "refs/heads/${BRANCH}",
+            "repository": { "name": "${REPO_NAME}" },
+            "pusher": { "name": "github-actions" }
+          }
+          JSONEOF
+          )
 
-      - name: Build and deploy
-        run: |
-          cd ${{ inputs.project-directory }}
-          if [ -n "${{ inputs.doppler-project }}" ]; then
-            doppler run -p ${{ inputs.doppler-project }} -c ${{ inputs.doppler-config }} -- \
-              docker compose -f ${{ inputs.compose-file }} up -d --build
-          else
-            docker compose -f ${{ inputs.compose-file }} up -d --build
-          fi
+          # Sign the payload with HMAC SHA-256 (same as GitHub webhooks)
+          SIGNATURE="sha256=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | awk '{print $2}')"
 
-      - name: Run migrations
-        if: ${{ inputs.run-migrations && inputs.migration-command != '' }}
-        run: |
-          cd ${{ inputs.project-directory }}
-          sleep 10  # Wait for containers to be healthy
-          if [ -n "${{ inputs.doppler-project }}" ]; then
-            doppler run -p ${{ inputs.doppler-project }} -c ${{ inputs.doppler-config }} -- \
-              docker compose -f ${{ inputs.compose-file }} exec ${{ inputs.migration-service }} ${{ inputs.migration-command }}
-          else
-            docker compose -f ${{ inputs.compose-file }} exec ${{ inputs.migration-service }} ${{ inputs.migration-command }}
-          fi
-
-      - name: Health check
-        if: ${{ inputs.health-check != '' }}
-        run: |
-          cd ${{ inputs.project-directory }}
-          sleep 5
-          ${{ inputs.health-check }}
-
-      - name: Notify Mattermost (success)
-        if: success() && secrets.MATTERMOST_WEBHOOK_URL != ''
-        run: |
-          REPO="${{ github.repository }}"
-          BRANCH="${{ inputs.branch }}"
-          SHA="${{ github.sha }}"
-          curl -s -X POST "${{ secrets.MATTERMOST_WEBHOOK_URL }}" \
+          # POST to toshi-bot
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST "https://bot.birdmug.com/github" \
             -H "Content-Type: application/json" \
-            -d "{\"text\": \":white_check_mark: **${REPO}** deployed \`${BRANCH}\` (\`${SHA:0:7}\`) to Toshi\"}"
+            -H "X-GitHub-Event: push" \
+            -H "X-Hub-Signature-256: $SIGNATURE" \
+            -d "$PAYLOAD")
 
-      - name: Notify Mattermost (failure)
-        if: failure() && secrets.MATTERMOST_WEBHOOK_URL != ''
-        run: |
-          REPO="${{ github.repository }}"
-          BRANCH="${{ inputs.branch }}"
-          curl -s -X POST "${{ secrets.MATTERMOST_WEBHOOK_URL }}" \
-            -H "Content-Type: application/json" \
-            -d "{\"text\": \":x: **${REPO}** deploy FAILED on \`${BRANCH}\` — check GitHub Actions\"}"
+          echo "Toshi-bot responded with HTTP $HTTP_CODE"
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "Deploy trigger failed!"
+            exit 1
+          fi
+          echo "Deploy triggered for $REPO_NAME ($BRANCH)"
