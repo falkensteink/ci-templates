@@ -42,6 +42,18 @@ on:
         description: "DB port for tests"
         type: string
         default: "5432"
+      db-user:
+        description: "Postgres user for service container"
+        type: string
+        default: "testuser"
+      db-password:
+        description: "Postgres password for service container"
+        type: string
+        default: "testpass"
+      db-name:
+        description: "Postgres database name for service container"
+        type: string
+        default: "testdb"
 
 jobs:
   lint:
@@ -69,13 +81,13 @@ jobs:
       postgres:
         image: ${{ inputs.services-postgres && 'postgres:16-alpine' || '' }}
         env:
-          POSTGRES_USER: testuser
-          POSTGRES_PASSWORD: testpass
-          POSTGRES_DB: testdb
+          POSTGRES_USER: ${{ inputs.db-user }}
+          POSTGRES_PASSWORD: ${{ inputs.db-password }}
+          POSTGRES_DB: ${{ inputs.db-name }}
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U testuser"
+          --health-cmd "pg_isready -U ${{ inputs.db-user }}"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
