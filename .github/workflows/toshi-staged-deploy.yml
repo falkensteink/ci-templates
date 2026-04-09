@@ -1,0 +1,54 @@
+name: Toshi Staged Deploy
+
+on:
+  workflow_call:
+    inputs:
+      repo-name:
+        description: "Repository name as it appears in deploy.sh REPO_DIR (e.g., NPC-PM, Spellstorm)"
+        type: string
+        required: true
+      branch:
+        description: "Branch to deploy"
+        type: string
+        default: "main"
+    secrets:
+      TOSHI_DEPLOY_SECRET:
+        description: "GitHub webhook secret for toshi-bot verification"
+        required: true
+
+jobs:
+  staged-deploy:
+    name: Staged Deploy to Toshi
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger staged deploy via toshi-bot
+        env:
+          WEBHOOK_SECRET: ${{ secrets.TOSHI_DEPLOY_SECRET }}
+          REPO_NAME: ${{ inputs.repo-name }}
+          BRANCH: ${{ inputs.branch }}
+        run: |
+          # Build payload with staged deploy flag
+          PAYLOAD="{\"ref\":\"refs/heads/${BRANCH}\",\"repository\":{\"name\":\"${REPO_NAME}\"},\"pusher\":{\"name\":\"github-actions\"},\"staged\":true}"
+
+          # Sign with HMAC SHA-256
+          SIGNATURE="sha256=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/^.* //')"
+
+          echo "Staged deploy: $REPO_NAME ($BRANCH) → staging → test → prod"
+
+          # POST to toshi-bot
+          RESPONSE=$(curl -s -w "\n%{http_code}" \
+            -X POST "https://bot.birdmug.com/github" \
+            -H "Content-Type: application/json" \
+            -H "X-GitHub-Event: push" \
+            -H "X-Hub-Signature-256: $SIGNATURE" \
+            -d "$PAYLOAD")
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | head -1)
+
+          echo "Toshi-bot responded with HTTP $HTTP_CODE: $BODY"
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "Staged deploy trigger failed!"
+            exit 1
+          fi
+          echo "Staged deploy triggered — staging → health check → production"

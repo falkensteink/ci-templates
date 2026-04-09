@@ -1,0 +1,26 @@
+name: E2E Tests
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "Target environment: prod or staging"
+        type: string
+        default: "prod"
+
+jobs:
+  e2e:
+    name: E2E Tests (${{ inputs.environment }})
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout scripts
+        uses: actions/checkout@v4
+        with:
+          repository: falkensteink/ci-templates
+          sparse-checkout: |
+            scripts/e2e-tests.sh
+
+      - name: Run E2E tests
+        run: |
+          chmod +x scripts/e2e-tests.sh
+          scripts/e2e-tests.sh "${{ inputs.environment }}"
