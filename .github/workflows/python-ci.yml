@@ -54,6 +54,10 @@ on:
         description: "Postgres database name for service container"
         type: string
         default: "testdb"
+      audit-ignore-ids:
+        description: "Space-separated CVE/GHSA IDs to ignore in pip-audit (e.g. 'CVE-2025-71176 GHSA-xyz')"
+        type: string
+        default: ""
 
 jobs:
   lint:
@@ -129,4 +133,9 @@ jobs:
       - name: Install pip-audit
         run: pip install pip-audit
       - name: Audit dependencies
-        run: pip-audit -r ${{ inputs.requirements-file }}
+        run: |
+          IGNORE_FLAGS=""
+          for id in ${{ inputs.audit-ignore-ids }}; do
+            IGNORE_FLAGS="$IGNORE_FLAGS --ignore-vuln $id"
+          done
+          pip-audit -r ${{ inputs.requirements-file }} $IGNORE_FLAGS
