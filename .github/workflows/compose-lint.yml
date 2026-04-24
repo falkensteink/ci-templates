@@ -1,0 +1,61 @@
+name: Compose Lint
+
+# Lint docker-compose files against FRAMEWORKS.md §3 — the rule set that
+# codifies the 2026-04-23 Toshi boot-loop incident (unbounded heavy
+# runners + restart: always storm). See scripts/compose-lint.py for the
+# rules and severity model.
+#
+# HIGH findings fail the job. MED/LOW/INFO are annotations only.
+#
+# Usage in a consumer project:
+#
+#   jobs:
+#     compose-lint:
+#       uses: falkensteink/ci-templates/.github/workflows/compose-lint.yml@main
+#       with:
+#         compose-files: "docker-compose.prod.yml docker-compose.yml"
+
+on:
+  workflow_call:
+    inputs:
+      compose-files:
+        description: "Space-separated list of compose files to lint (relative to repo root). Defaults to all docker-compose*.yml in the root."
+        type: string
+        default: ""
+      python-version:
+        description: "Python version for the linter"
+        type: string
+        default: "3.12"
+      working-directory:
+        description: "Directory containing the compose files (relative to repo root)"
+        type: string
+        default: "."
+
+jobs:
+  lint:
+    name: §3 compose lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out ci-templates for the linter script
+        uses: actions/checkout@v4
+        with:
+          repository: falkensteink/ci-templates
+          path: .ci-templates
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Install pyyaml
+        run: pip install pyyaml
+
+      - name: Run compose-lint
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          if [ -n "${{ inputs.compose-files }}" ]; then
+            python "${{ github.workspace }}/.ci-templates/scripts/compose-lint.py" ${{ inputs.compose-files }}
+          else
+            python "${{ github.workspace }}/.ci-templates/scripts/compose-lint.py"
+          fi
