@@ -14,8 +14,9 @@ compose-compliance audit for grounding):
              exemption reason. Might be intentional (sidecars, one-shot
              migrate containers) — warning, not block.
   R003 HIGH  a cloudflared service must use `depends_on: { <app>:
-             { condition: service_healthy } }`, not a plain list. Otherwise
-             the tunnel starts forwarding traffic before the app is ready.
+             { condition: service_healthy } }`. A plain-list form misses
+             the health gate; no depends_on at all is worse — the tunnel
+             can start forwarding before any app container is ready.
   R004 LOW   healthcheck is present but has no `start_period`. Containers
              that take more than a few seconds to boot can flap unhealthy
              before they're actually up.
@@ -81,6 +82,14 @@ HEAVY_RUNNER_HINTS = (
     "worker", "embed", "reindex", "piper", "tts",
     "pgvector", "indexer", "generator", "ollama",
     "transcrib", "synthes", "audiobook",
+    # Observability / log-stack family (added 2026-04-24 after Log Stack
+    # audit #6 found Loki running uncapped on Toshi — same sustained-
+    # disk-I/O class as the Kyle-Rag worker that caused the 2026-04-23
+    # boot-loop). Keep narrow: only services that do continuous
+    # write-heavy log or metric ingest.
+    "loki", "promtail", "grafana",
+    "aggregator", "clickhouse", "elasticsearch",
+    "victoriametrics", "prometheus",
 )
 
 
@@ -177,7 +186,20 @@ def lint_file(path: Path) -> tuple[list[dict], list[dict]]:
         # R003: cloudflared depends_on — always applies if cloudflared service.
         if is_cloudflared(svc):
             deps = svc.get("depends_on")
-            if isinstance(deps, list) and deps:
+            # Peer services in the same file (excluding self + other cloudflareds).
+            # If there are peers but no depends_on, the tunnel races them on startup.
+            peers = [
+                s for s, other in services.items()
+                if s != sname and isinstance(other, dict) and not is_cloudflared(other)
+            ]
+            if deps is None and peers:
+                findings.append({
+                    "file": str(path), "service": sname, "rule": "R003", "severity": "HIGH",
+                    "msg": f"cloudflared has no depends_on but peer services "
+                           f"{peers} exist. Tunnel can forward traffic to not-yet-ready "
+                           f"apps. Add depends_on: <app>: condition: service_healthy.",
+                })
+            elif isinstance(deps, list) and deps:
                 findings.append({
                     "file": str(path), "service": sname, "rule": "R003", "severity": "HIGH",
                     "msg": f"cloudflared depends_on is a plain list {deps} — must be map "
