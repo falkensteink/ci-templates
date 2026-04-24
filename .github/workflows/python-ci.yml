@@ -2,6 +2,15 @@ name: Python CI
 
 on:
   workflow_call:
+    secrets:
+      BIRDMUG_AUTH_READ:
+        description: |
+          Optional PAT (fine-grained, Contents:Read on falkensteink/birdmug-auth) for
+          repos whose requirements pin the `birdmug-auth-client` subpackage via
+          `git+https://github.com/falkensteink/birdmug-auth@<sha>#subdirectory=client`.
+          When set, a git-config step translates https://github.com/ clones to use
+          this token. When unset (public-deps-only consumers), the step is a no-op.
+        required: false
     inputs:
       python-version:
         type: string
@@ -105,6 +114,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ inputs.python-version }}
+      - name: Configure git for private-repo deps (if BIRDMUG_AUTH_READ provided)
+        env:
+          BIRDMUG_AUTH_READ: ${{ secrets.BIRDMUG_AUTH_READ }}
+        run: |
+          if [ -n "$BIRDMUG_AUTH_READ" ]; then
+            git config --global url."https://x-access-token:${BIRDMUG_AUTH_READ}@github.com/".insteadOf "https://github.com/"
+            echo "Configured git to use BIRDMUG_AUTH_READ for github.com clones."
+          else
+            echo "No BIRDMUG_AUTH_READ secret passed; skipping git config (public deps only)."
+          fi
       - name: Install dependencies
         run: |
           if [ -n "${{ inputs.requirements-dev-file }}" ]; then
@@ -130,6 +149,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ inputs.python-version }}
+      - name: Configure git for private-repo deps (if BIRDMUG_AUTH_READ provided)
+        env:
+          BIRDMUG_AUTH_READ: ${{ secrets.BIRDMUG_AUTH_READ }}
+        run: |
+          if [ -n "$BIRDMUG_AUTH_READ" ]; then
+            git config --global url."https://x-access-token:${BIRDMUG_AUTH_READ}@github.com/".insteadOf "https://github.com/"
+          fi
       - name: Install pip-audit
         run: pip install pip-audit
       - name: Audit dependencies
