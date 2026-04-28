@@ -25,6 +25,16 @@ compose-compliance audit for grounding):
              video/audio, indexer work) but has no `cpus:` + `memory:`
              caps. These caused the 2026-04-23 Toshi crash — FRAMEWORKS.md
              §3 line 271 mandates caps on heavy runners.
+  R006 HIGH  port-coherence: when a service's environment binds PORT from
+             a substitution (e.g. `PORT=${PORT}` from Doppler/.env), the
+             container's `ports:` mapping container-side and the
+             `healthcheck` probe must reference that env var (`${PORT}`
+             or `process.env.PORT`) rather than a literal number.
+             Hardcoding lets Doppler and the probe drift apart and break
+             at runtime — caused the 2026-04-28 BirdMug-Portal 8-hour
+             outage where Doppler had PORT=3080, compose hardcoded 3033,
+             healthcheck probed 3033, container went unhealthy, watchdog
+             churned silently every 5 minutes.
 
 Exit codes:
   0  no HIGH findings
@@ -41,6 +51,7 @@ restart/healthcheck/etc — those inherit from the base at merge time.
 """
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -131,6 +142,75 @@ def has_resource_caps(svc: dict) -> tuple[bool, bool]:
 def annotate(level: str, file: str, rule: str, severity: str, service: str, msg: str) -> None:
     """Emit a GitHub Actions annotation."""
     print(f"::{level} file={file}::[{rule} / {severity}] {service}: {msg}")
+
+
+# Matches `PORT=${...}` / `PORT=$VAR` — i.e. PORT is bound from an
+# external substitution (Doppler, .env, shell env). A literal default
+# like `PORT=3000` does NOT match — that's a self-contained config and
+# can safely be hardcoded everywhere.
+_PORT_FROM_SUBSTITUTION = re.compile(r"^\s*PORT\s*=\s*\$\{?[A-Za-z_][A-Za-z0-9_]*\}?")
+
+# Matches a literal numeric port in a probe URL (`localhost:3033`,
+# `127.0.0.1:8080`). The negative-lookahead skips :2375 (the
+# docker-socket-proxy convention, always a fixed internal port — not
+# driven by app PORT).
+_LITERAL_PROBE_PORT = re.compile(r"\b(?:localhost|127\.0\.0\.1)\s*:\s*(?!2375\b)(\d{2,5})\b")
+
+# Matches whether a healthcheck/probe references PORT via env-var.
+_PORT_VAR_REF = re.compile(r"(\$\{?\s*PORT\s*\}?|process\.env\.PORT|os\.environ\[?[\"']?PORT)")
+
+
+def has_port_from_substitution(svc: dict) -> bool:
+    """True if the service's environment has PORT bound to a substitution
+    (PORT=${...} or PORT=$VAR), meaning PORT can change at runtime."""
+    env = svc.get("environment", []) or []
+    if isinstance(env, dict):
+        env_strs = [f"{k}={v}" for k, v in env.items()]
+    else:
+        env_strs = [str(e) for e in env]
+    return any(_PORT_FROM_SUBSTITUTION.match(s) for s in env_strs)
+
+
+def healthcheck_test_str(svc: dict) -> str:
+    """Flatten a healthcheck.test to a single string for substring scanning.
+    Compose accepts either a list (`["CMD", "node", "-e", "..."]`) or a
+    shell string (`"curl -f localhost:3000/health"`); normalize to one."""
+    hc = svc.get("healthcheck") or {}
+    test = hc.get("test")
+    if test is None:
+        return ""
+    if isinstance(test, list):
+        return " ".join(str(x) for x in test)
+    return str(test)
+
+
+def hardcoded_container_ports(svc: dict) -> list[str]:
+    """Return the container-side of any `ports:` entry that's a literal
+    numeric port. Skips anything that looks like a substitution
+    (`${PORT}`) or a name-only short form."""
+    ports = svc.get("ports", []) or []
+    out: list[str] = []
+    for p in ports:
+        ps = str(p).strip().strip('"').strip("'")
+        # Long form is a dict (`{ target: 3000, published: 80 }`); skip — those
+        # already declare the target explicitly.
+        if not isinstance(p, str):
+            continue
+        # Strip optional protocol suffix (3000/tcp).
+        ps_no_proto = re.sub(r"/(tcp|udp)$", "", ps)
+        parts = ps_no_proto.split(":")
+        # "container_port" (single value, host-binds) — flag if numeric.
+        if len(parts) == 1 and parts[0].isdigit():
+            out.append(parts[0])
+            continue
+        # "host:container", "ip:host:container".
+        container_side = parts[-1]
+        # Allow ${...} or $VAR — that's the cure, not the disease.
+        if "$" in container_side:
+            continue
+        if container_side.isdigit():
+            out.append(container_side)
+    return out
 
 
 def lint_file(path: Path) -> tuple[list[dict], list[dict]]:
@@ -254,6 +334,34 @@ def lint_file(path: Path) -> tuple[list[dict], list[dict]]:
                     "msg": f"looks like a heavy runner (hint(s): {', '.join(hints)}) but "
                            f"missing {', '.join(missing)} cap(s). FRAMEWORKS.md §3 line 271 "
                            f"+ 2026-04-23 Toshi crash — heavy runners must throttle.",
+                })
+
+        # R006: port coherence — only relevant when PORT is bound from a
+        # substitution (PORT=${...}). For a self-contained literal like
+        # PORT=3000, hardcoding everywhere is fine.
+        if has_port_from_substitution(svc):
+            hc_str = healthcheck_test_str(svc)
+            if hc_str:
+                # Healthcheck has a literal probe port and no $PORT reference.
+                literal_ports = [m.group(1) for m in _LITERAL_PROBE_PORT.finditer(hc_str)]
+                if literal_ports and not _PORT_VAR_REF.search(hc_str):
+                    findings.append({
+                        "file": str(path), "service": sname, "rule": "R006", "severity": "HIGH",
+                        "msg": f"healthcheck probes literal port(s) {literal_ports} but service "
+                               f"binds PORT from a substitution. They will drift apart the "
+                               f"moment PORT changes (Doppler, .env, etc). Use $PORT or "
+                               f"process.env.PORT in the probe. (2026-04-28 BirdMug-Portal "
+                               f"outage was exactly this.)",
+                    })
+
+            hc_ports = hardcoded_container_ports(svc)
+            if hc_ports:
+                findings.append({
+                    "file": str(path), "service": sname, "rule": "R006", "severity": "HIGH",
+                    "msg": f"ports: hardcodes container-side port(s) {hc_ports} but service "
+                           f"binds PORT from a substitution. Use \"<host>:${{PORT}}\" so the "
+                           f"mapping follows what the app actually listens on. "
+                           f"(2026-04-28 BirdMug-Portal outage.)",
                 })
 
     return findings, errors
