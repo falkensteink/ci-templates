@@ -11,6 +11,22 @@ on:
         description: "Branch to deploy"
         type: string
         default: "main"
+      health-url:
+        description: "Public URL polled after the trigger to verify the deploy actually landed (e.g. https://birdmug.com/health). When empty, the workflow goes green on the toshi-bot webhook ack — beware: that just means 'request queued', NOT 'deploy succeeded'."
+        type: string
+        default: ""
+      health-deadline-seconds:
+        description: "How long to poll the health URL after triggering, in seconds. Default 600 (10 min). Should comfortably exceed staged-deploy.sh's worst-case path: 60s debounce + staging build (~120s) + staging healthcheck (~45s) + prod build (~120s) + smoke test."
+        type: number
+        default: 600
+      health-warmup-seconds:
+        description: "Seconds to wait after triggering before starting to poll. Covers toshi-bot's 60s debounce. Default 90."
+        type: number
+        default: 90
+      health-stable-checks:
+        description: "Number of consecutive 200 OK responses (15s apart) required to declare the deploy verified. Default 3 = 30s of stability, lets the rolling cut-over briefly 502 without false-failing."
+        type: number
+        default: 3
     secrets:
       TOSHI_DEPLOY_SECRET:
         description: "GitHub webhook secret for toshi-bot verification"
@@ -52,3 +68,52 @@ jobs:
             exit 1
           fi
           echo "Staged deploy triggered — staging → health check → production"
+
+      - name: Wait for deploy to land at $HEALTH_URL
+        if: ${{ inputs.health-url != '' }}
+        env:
+          HEALTH_URL: ${{ inputs.health-url }}
+          DEADLINE_SEC: ${{ inputs.health-deadline-seconds }}
+          WARMUP_SEC: ${{ inputs.health-warmup-seconds }}
+          STABLE_CHECKS: ${{ inputs.health-stable-checks }}
+        run: |
+          # Poll the public URL until it returns N consecutive 200s, OR
+          # the deadline elapses. Without this, the workflow goes green
+          # the moment toshi-bot ACKs the webhook — which means
+          # "deploy queued" not "deploy succeeded." That gap silently
+          # masked the 2026-04-28 BirdMug-Portal outage: staged deploy
+          # ran, hit the (already-broken) infinite-recursion bug in
+          # staged-deploy.sh, but Actions still reported success
+          # because the queue ack came back HTTP 200.
+          set -u
+          echo "::notice::Polling $HEALTH_URL for outcome verification (deadline ${DEADLINE_SEC}s)"
+          echo "Warmup: sleeping ${WARMUP_SEC}s before first probe (covers toshi-bot debounce)"
+          sleep "$WARMUP_SEC"
+
+          consecutive=0
+          started=$(date +%s)
+          last_status=""
+          while [ $(($(date +%s) - started)) -lt "$DEADLINE_SEC" ]; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$HEALTH_URL" 2>/dev/null || echo "000")
+            elapsed=$(($(date +%s) - started))
+            if [ "$code" = "200" ]; then
+              consecutive=$((consecutive + 1))
+              if [ "$consecutive" -ge "$STABLE_CHECKS" ]; then
+                echo "::notice::$HEALTH_URL stable at 200 ($consecutive consecutive). Deploy verified at +${elapsed}s."
+                exit 0
+              fi
+            else
+              consecutive=0
+            fi
+            # Log status changes to avoid spamming.
+            if [ "$code" != "$last_status" ]; then
+              echo "[t+${elapsed}s] $HEALTH_URL → $code (consecutive 200s: $consecutive)"
+              last_status="$code"
+            fi
+            sleep 15
+          done
+
+          # Timeout. Pull a final probe + body for diagnostics.
+          final=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$HEALTH_URL" 2>/dev/null || echo "000")
+          echo "::error::$HEALTH_URL did not reach $STABLE_CHECKS consecutive 200s within ${DEADLINE_SEC}s (final probe: $final). Deploy likely failed silently — check the deploy log on Toshi."
+          exit 1
