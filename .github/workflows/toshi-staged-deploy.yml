@@ -32,6 +32,14 @@ on:
         description: "GitHub webhook secret for toshi-bot verification"
         required: true
 
+# Queue concurrent staged deploys per (repo, branch) — cancelling
+# mid-staging-promote leaves a partial container state on Toshi that
+# the next deploy has to clean up. Better to wait. cancel-in-progress
+# is false; a second trigger lines up behind the running deploy.
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.repo-name }}-${{ inputs.branch }}
+  cancel-in-progress: false
+
 jobs:
   staged-deploy:
     name: Staged Deploy to Toshi

@@ -29,6 +29,13 @@ on:
           RUN block falls through cleanly.
         required: false
 
+# Cancel an in-progress build when a fresher push to the same ref arrives —
+# the older image is about to be obsolete anyway, no point burning minutes
+# on it. Saves GHA minutes during push-fix-push loops (2026-04-29 crunch).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-push:
     name: Build & Push Image
