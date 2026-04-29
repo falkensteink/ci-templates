@@ -16,6 +16,13 @@ on:
         description: "GitHub webhook secret for toshi-bot verification"
         required: true
 
+# Queue concurrent deploys instead of cancelling — half-deployed Toshi
+# state is worse than waiting. cancel-in-progress=false means a second
+# push lines up behind the running deploy and starts after it finishes.
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.repo-name }}-${{ inputs.branch }}
+  cancel-in-progress: false
+
 jobs:
   deploy:
     name: Deploy to Toshi

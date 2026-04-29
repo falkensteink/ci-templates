@@ -68,6 +68,12 @@ on:
         type: string
         default: ""
 
+# Cancel an in-progress run when a fresher push to the same ref arrives.
+# Saves GHA minutes during push-fix-push loops (2026-04-29 minute crunch).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint:
     name: Lint & Format

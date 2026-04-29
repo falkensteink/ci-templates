@@ -31,6 +31,13 @@ on:
         type: string
         default: "."
 
+# Cancel an in-progress lint when a fresher push to the same ref arrives —
+# the old result is about to be obsolete anyway. Saves GHA minutes during
+# tight push-fix-push loops (the 2026-04-29 minute crunch).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint:
     name: §3 compose lint
