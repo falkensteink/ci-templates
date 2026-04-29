@@ -15,6 +15,19 @@ on:
         description: "Docker build context (relative to repo root)"
         type: string
         default: "."
+    secrets:
+      BIRDMUG_AUTH_READ:
+        description: |
+          Optional fine-grained PAT (Contents:Read on falkensteink/birdmug-auth)
+          mounted into the build as `id=github_token`. Required only for repos
+          whose Dockerfile pip-installs a dep pinned to the private birdmug-auth
+          repo (NPC-PM, bug-fairy, etc.). Dockerfile must declare:
+            RUN --mount=type=secret,id=github_token \
+                ( test -s /run/secrets/github_token && git config --global ... ) \
+                && pip install ...
+          Public-deps-only consumers can omit this secret — the test in the
+          RUN block falls through cleanly.
+        required: false
 
 jobs:
   build-push:
@@ -58,3 +71,5 @@ jobs:
           tags: |
             ${{ steps.meta.outputs.image }}:latest
             ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.short-sha }}
+          secrets: |
+            github_token=${{ secrets.BIRDMUG_AUTH_READ }}
