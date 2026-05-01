@@ -17,6 +17,20 @@ cd /work
 
 LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Per-repo override knobs via .toshi/ci.env. Lets a repo pin its own
+# TOSHI_CI_LINT_PATHS / TOSHI_CI_TEST_COMMAND / TOSHI_CI_SKIP_* in-tree so
+# toshi-bot's container env doesn't have to know about every repo. Sourcing
+# under `set -a` exports the assignments so the per-language runner inherits
+# them across `exec`. Values here override anything passed in via the
+# container's environment.
+if [[ -f .toshi/ci.env ]]; then
+    echo "[run-ci] sourcing .toshi/ci.env"
+    set -a
+    # shellcheck disable=SC1091
+    source .toshi/ci.env
+    set +a
+fi
+
 # 1. Per-repo override
 if [[ -f .toshi/lang ]]; then
     LANG_KEY="$(tr -d '[:space:]' <.toshi/lang)"

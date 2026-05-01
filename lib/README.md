@@ -19,19 +19,26 @@ configured today.
 
 | File             | Role                                                      |
 |------------------|-----------------------------------------------------------|
-| `run-ci.sh`      | Entry point. Detects language → dispatches to `*-ci.sh`. |
+| `run-ci.sh`      | Entry point. Sources `.toshi/ci.env`, detects language → dispatches to `*-ci.sh`. |
 | `python-ci.sh`   | Ruff (lint + format) + project install + pytest.         |
-| `node-ci.sh`     | _(planned)_ ESLint + npm test.                           |
+| `node-ci.sh`     | npm install/ci + `npm run lint --if-present` + `npm test`. Runs in `node:20-bookworm-slim`. |
 
-## Per-repo override
+## Per-repo language override
 
 Drop `.toshi/lang` in a repo to force a language when auto-detection guesses
 wrong. One word, one of {`python`, `node`}. Without it, `pyproject.toml`
 implies Python and `package.json` implies Node (Python wins on hybrid).
+toshi-bot's `ci.js` reads this file post-clone to pick the container image
+(Python container vs Node container).
 
-## Per-repo customization
+## Per-repo customization (`.toshi/ci.env`)
 
-Set env vars on the toshi-bot side (or in `.toshi/env` if added later):
+Drop a `.toshi/ci.env` file in the repo to override defaults. The file is
+sourced by `run-ci.sh` under `set -a`, so plain shell `KEY=value` lines
+become exported env vars that the per-language runners pick up. Values here
+override anything inherited from toshi-bot's container env.
+
+**Python (`python-ci.sh`):**
 
 | Variable                    | Default                              |
 |-----------------------------|--------------------------------------|
@@ -40,6 +47,28 @@ Set env vars on the toshi-bot side (or in `.toshi/env` if added later):
 | `TOSHI_CI_REQUIREMENTS`     | `-e ".[dev]"` if `pyproject.toml` else `-r requirements.txt` |
 | `TOSHI_CI_SKIP_LINT`        | unset (lint runs)                    |
 | `TOSHI_CI_SKIP_TEST`        | unset (tests run)                    |
+
+**Node (`node-ci.sh`):**
+
+| Variable                    | Default                              |
+|-----------------------------|--------------------------------------|
+| `TOSHI_CI_NODE_INSTALL`     | `npm ci ...` if `package-lock.json`/`npm-shrinkwrap.json`, else `npm install ...` |
+| `TOSHI_CI_LINT_COMMAND`     | `npm run lint --if-present`          |
+| `TOSHI_CI_TEST_COMMAND`     | `npm test`                           |
+| `TOSHI_CI_SKIP_LINT`        | unset (lint runs)                    |
+| `TOSHI_CI_SKIP_TEST`        | unset (tests run)                    |
+
+Example `.toshi/ci.env` for a Python repo with no tests yet:
+
+```
+TOSHI_CI_SKIP_TEST=1
+```
+
+Example for Spellstorm (custom test files):
+
+```
+TOSHI_CI_TEST_COMMAND=pytest test_game.py test_server.py -q --tb=short
+```
 
 ## Exit codes
 
