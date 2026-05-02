@@ -33,10 +33,15 @@ toshi-bot's `ci.js` reads this file post-clone to pick the container image
 
 ## Per-repo customization (`.toshi/ci.env`)
 
-Drop a `.toshi/ci.env` file in the repo to override defaults. The file is
-sourced by `run-ci.sh` under `set -a`, so plain shell `KEY=value` lines
-become exported env vars that the per-language runners pick up. Values here
-override anything inherited from toshi-bot's container env.
+Drop a `.toshi/ci.env` file in the repo to override defaults. `run-ci.sh`
+parses it as plain `KEY=value` lines (one per line, split on the first `=`)
+and exports each assignment so the per-language runners pick them up.
+Values here override anything inherited from toshi-bot's container env.
+
+Spaces in values are fine — no shell quoting required (you're not sourcing,
+the parser just reads each line). Surrounding `"..."` or `'...'` are stripped
+if you prefer to write them. Comments start with `#`. No variable expansion
+or command substitution — declarative only.
 
 **Python (`python-ci.sh`):**
 

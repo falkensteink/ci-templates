@@ -19,16 +19,35 @@ LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Per-repo override knobs via .toshi/ci.env. Lets a repo pin its own
 # TOSHI_CI_LINT_PATHS / TOSHI_CI_TEST_COMMAND / TOSHI_CI_SKIP_* in-tree so
-# toshi-bot's container env doesn't have to know about every repo. Sourcing
-# under `set -a` exports the assignments so the per-language runner inherits
-# them across `exec`. Values here override anything passed in via the
-# container's environment.
+# toshi-bot's container env doesn't have to know about every repo. Values
+# here override anything passed in via the container's environment.
+#
+# We parse the file ourselves rather than `source`-ing it because bash
+# sourcing treats unquoted spaces as command separators (e.g.
+# `KEY=val1 val2` runs `val2` with KEY=val1 in env, then proceeds), which
+# is a footgun for declarative config. Our parser splits on the first `=`,
+# strips one layer of surrounding double or single quotes, and exports.
+# No variable expansion, no command substitution — declarative only.
 if [[ -f .toshi/ci.env ]]; then
-    echo "[run-ci] sourcing .toshi/ci.env"
-    set -a
-    # shellcheck disable=SC1091
-    source .toshi/ci.env
-    set +a
+    echo "[run-ci] loading .toshi/ci.env"
+    while IFS= read -r ci_env_line || [[ -n "$ci_env_line" ]]; do
+        # Trim leading whitespace
+        ci_env_line="${ci_env_line#"${ci_env_line%%[![:space:]]*}"}"
+        # Skip blank lines and comments
+        [[ -z "$ci_env_line" || "$ci_env_line" == \#* ]] && continue
+        # Need a '=' to be a valid assignment
+        [[ "$ci_env_line" == *=* ]] || continue
+        ci_env_key="${ci_env_line%%=*}"
+        ci_env_value="${ci_env_line#*=}"
+        # Trim trailing whitespace from key
+        ci_env_key="${ci_env_key%"${ci_env_key##*[![:space:]]}"}"
+        # Strip a single layer of surrounding quotes from value if present
+        if [[ "$ci_env_value" == \"*\" || "$ci_env_value" == \'*\' ]]; then
+            ci_env_value="${ci_env_value:1:${#ci_env_value}-2}"
+        fi
+        export "$ci_env_key=$ci_env_value"
+    done < .toshi/ci.env
+    unset ci_env_line ci_env_key ci_env_value
 fi
 
 # 1. Per-repo override
