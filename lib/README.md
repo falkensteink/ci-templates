@@ -1,0 +1,104 @@
+# Toshi-native CI scripts
+
+These scripts run inside the CI container that toshi-bot spawns for each PR
+or non-default-branch push. They are the runtime counterpart to the GitHub
+Actions reusable workflows in `../.github/workflows/`.
+
+## Why these exist
+
+The fleet's CI is moving off GitHub Actions onto toshi-bot's self-hosted
+pipeline (see incident notes 2026-04-29 — "what are we getting from GitHub
+Actions that we couldn't just build on Toshi"). These scripts give toshi-bot
+a single, reusable orchestration surface — when a webhook fires, toshi-bot
+clones the repo, mounts this directory into a language-appropriate container,
+and runs `run-ci.sh`. Per-repo lint/test definitions live as env-var
+overrides; the defaults match how the existing Actions workflows are
+configured today.
+
+## Layout
+
+| File             | Role                                                      |
+|------------------|-----------------------------------------------------------|
+| `run-ci.sh`      | Entry point. Sources `.toshi/ci.env`, detects language → dispatches to `*-ci.sh`. |
+| `python-ci.sh`   | Ruff (lint + format) + project install + pytest.         |
+| `node-ci.sh`     | npm install/ci + `npm run lint --if-present` + `npm test`. Runs in `node:20-bookworm-slim`. |
+
+## Per-repo language override
+
+Drop `.toshi/lang` in a repo to force a language when auto-detection guesses
+wrong. One word, one of {`python`, `node`}. Without it, `pyproject.toml`
+implies Python and `package.json` implies Node (Python wins on hybrid).
+toshi-bot's `ci.js` reads this file post-clone to pick the container image
+(Python container vs Node container).
+
+## Per-repo customization (`.toshi/ci.env`)
+
+Drop a `.toshi/ci.env` file in the repo to override defaults. `run-ci.sh`
+parses it as plain `KEY=value` lines (one per line, split on the first `=`)
+and exports each assignment so the per-language runners pick them up.
+Values here override anything inherited from toshi-bot's container env.
+
+Spaces in values are fine — no shell quoting required (you're not sourcing,
+the parser just reads each line). Surrounding `"..."` or `'...'` are stripped
+if you prefer to write them. Comments start with `#`. No variable expansion
+or command substitution — declarative only.
+
+**Python (`python-ci.sh`):**
+
+| Variable                    | Default                              |
+|-----------------------------|--------------------------------------|
+| `TOSHI_CI_LINT_PATHS`       | first-found of: `apps core tests scripts src`, else `.` |
+| `TOSHI_CI_TEST_COMMAND`     | `pytest -q --tb=short`               |
+| `TOSHI_CI_REQUIREMENTS`     | `-e ".[dev]"` if `pyproject.toml` else `-r requirements.txt` |
+| `TOSHI_CI_SKIP_LINT`        | unset (lint runs)                    |
+| `TOSHI_CI_SKIP_TEST`        | unset (tests run)                    |
+
+**Node (`node-ci.sh`):**
+
+| Variable                    | Default                              |
+|-----------------------------|--------------------------------------|
+| `TOSHI_CI_NODE_INSTALL`     | `npm ci ...` if `package-lock.json`/`npm-shrinkwrap.json`, else `npm install ...` |
+| `TOSHI_CI_LINT_COMMAND`     | `npm run lint --if-present`          |
+| `TOSHI_CI_TEST_COMMAND`     | `npm test`                           |
+| `TOSHI_CI_SKIP_LINT`        | unset (lint runs)                    |
+| `TOSHI_CI_SKIP_TEST`        | unset (tests run)                    |
+
+Example `.toshi/ci.env` for a Python repo with no tests yet:
+
+```
+TOSHI_CI_SKIP_TEST=1
+```
+
+Example for Spellstorm (custom test files):
+
+```
+TOSHI_CI_TEST_COMMAND=pytest test_game.py test_server.py -q --tb=short
+```
+
+## Not yet supported
+
+The harness deliberately stays narrow. Two fleet projects can't yet move
+off GH Actions because they need runtime/service shapes the harness
+doesn't model:
+
+- **NPC-PM** — needs a Postgres service container alongside the runner so
+  `alembic upgrade head` + `pytest` can hit a real DB. Today's harness
+  spawns a single ephemeral container; adding a docker-compose-style
+  service group is real harness work.
+- **Sports Credit Score** — needs a `dotnet-ci.sh` runner and a .NET base
+  image (the existing two are `python:3.12-slim` and `node:20-bookworm-slim`).
+  `ci.js`'s `detectLang` would also need a `*.sln` / `*.csproj` branch.
+
+Both stay on GH Actions until the harness picks up those extensions.
+
+## Exit codes
+
+| Code | Meaning                                              |
+|------|------------------------------------------------------|
+| 0    | All checks passed                                    |
+| 1+   | Lint or test failure (passed through from the tool)  |
+| 64   | No language detected                                 |
+| 65   | Language detected but no runner script exists        |
+| 70   | Failed to install ruff                               |
+| 71   | Failed to install project (pip install spec)         |
+| 72   | Failed to install git for git+https build deps       |
