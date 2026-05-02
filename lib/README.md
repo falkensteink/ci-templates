@@ -85,3 +85,4 @@ TOSHI_CI_TEST_COMMAND=pytest test_game.py test_server.py -q --tb=short
 | 65   | Language detected but no runner script exists        |
 | 70   | Failed to install ruff                               |
 | 71   | Failed to install project (pip install spec)         |
+| 72   | Failed to install git for git+https build deps       |

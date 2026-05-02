@@ -75,6 +75,15 @@ if [[ -z "${TOSHI_CI_SKIP_TEST:-}" ]]; then
     fi
 
     if [[ -n "$INSTALL_SPEC" ]]; then
+        # python:3.12-slim doesn't ship `git`, so pip can't resolve any
+        # `pkg @ git+https://...` pins (used for private build deps like
+        # birdmug-auth-client and falkensteink-logging). Install git + CA
+        # certs once, only if missing — adds ~3-5s on cold runs, no-op on
+        # warm ones. ca-certificates is on -slim already but cheap to assert.
+        if ! command -v git >/dev/null 2>&1; then
+            banner "Installing git for git+https build deps"
+            apt-get update -qq && apt-get install -y --no-install-recommends -qq git ca-certificates || { cleanup_netrc; exit 72; }
+        fi
         banner "Installing project ($INSTALL_SPEC)"
         # shellcheck disable=SC2086  # we want word-splitting on INSTALL_SPEC
         pip install --disable-pip-version-check --quiet --no-input $INSTALL_SPEC || { cleanup_netrc; exit 71; }
