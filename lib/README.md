@@ -75,6 +75,22 @@ Example for Spellstorm (custom test files):
 TOSHI_CI_TEST_COMMAND=pytest test_game.py test_server.py -q --tb=short
 ```
 
+## Not yet supported
+
+The harness deliberately stays narrow. Two fleet projects can't yet move
+off GH Actions because they need runtime/service shapes the harness
+doesn't model:
+
+- **NPC-PM** — needs a Postgres service container alongside the runner so
+  `alembic upgrade head` + `pytest` can hit a real DB. Today's harness
+  spawns a single ephemeral container; adding a docker-compose-style
+  service group is real harness work.
+- **Sports Credit Score** — needs a `dotnet-ci.sh` runner and a .NET base
+  image (the existing two are `python:3.12-slim` and `node:20-bookworm-slim`).
+  `ci.js`'s `detectLang` would also need a `*.sln` / `*.csproj` branch.
+
+Both stay on GH Actions until the harness picks up those extensions.
+
 ## Exit codes
 
 | Code | Meaning                                              |
